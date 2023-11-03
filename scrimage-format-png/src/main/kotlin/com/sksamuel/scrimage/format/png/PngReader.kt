@@ -6,6 +6,7 @@ import com.sksamuel.scrimage.ImmutableImage
 import com.sksamuel.scrimage.pixels.PixelTools
 import java.awt.image.BufferedImage
 import java.io.InputStream
+import java.util.Arrays
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
@@ -18,7 +19,7 @@ class PngReader {
    private val iCCP: ByteArray = charArrayOf('i', 'C', 'C', 'P').map { it.code.toByte() }.toByteArray()
 
    fun read(input: InputStream): ImmutableImage {
-      val sig: ByteArray = input.readNBytes(magicBytes.size)
+      val sig: ByteArray = input.readAtMost(magicBytes.size)
       if (!sig.contentEquals(magicBytes)) {
          error(
             "Not a valid PNG file: Magic bytes differ: " +
@@ -91,14 +92,14 @@ class PngReader {
 
    private fun readHeaderChunk(input: InputStream): HeaderChunk {
 
-      val len = input.readNBytes(4).toUInt()
+      val len = input.readAtMost(4).toUInt()
       require(len == 13L) { "Headers must be 13 bytes" }
 
-      val type = input.readNBytes(4)
+      val type = input.readAtMost(4)
       require(type.contentEquals(IDHR)) { "Type must be IDHR" }
 
-      val width = input.readNBytes(4).toUInt().toInt()
-      val height = input.readNBytes(4).toUInt().toInt()
+      val width = input.readAtMost(4).toUInt().toInt()
+      val height = input.readAtMost(4).toUInt().toInt()
       val bitDepth = input.read().toByte()
       println("bitDepth $bitDepth")
 
@@ -119,13 +120,13 @@ class PngReader {
       val interlaceMethod = input.read().toByte()
       println("interlaceMethod $interlaceMethod")
 
-      val crc = input.readNBytes(4)
+      val crc = input.readAtMost(4)
       return HeaderChunk(width, height, bitDepth, colorType, compressionMethod, interlaceMethod, crc)
    }
 
    private fun readChunk(input: InputStream): Chunk? {
-      val len = input.readNBytes(4).toUInt()
-      val type = input.readNBytes(4)
+      val len = input.readAtMost(4).toUInt()
+      val type = input.readAtMost(4)
 
       fun typeString(type: ByteArray) = type.map { it.toInt().toChar() }.toCharArray().concatToString()
       println("Type=" + typeString(type))
@@ -138,29 +139,29 @@ class PngReader {
 //         type[3].and(b) == 0.toByte() -> error("Unsupported critical chunk ${typeString(type)}")
          else -> {
             println("Unsupported chunk type ${type.map { it.toInt().toChar() }.toCharArray().concatToString()}")
-            input.readNBytes(len.toInt())
-            input.readNBytes(4) // crc
+            input.readAtMost(len.toInt())
+            input.readAtMost(4) // crc
             null
          }
       }
    }
 
    private fun readIccpChunk(input: InputStream, len: Long): ICCPChunk {
-      val bytes = input.readNBytes(len.toInt())
+      val bytes = input.readAtMost(len.toInt())
       val name = bytes.takeWhile { it != 0.toByte() }.map { it.toInt().toChar() }.toCharArray().concatToString()
       val profile: ByteArray = bytes.drop(name.length + 2).toByteArray()
-      val crc = input.readNBytes(4)
+      val crc = input.readAtMost(4)
       return ICCPChunk(name, 0, profile, crc)
    }
 
    private fun readDataChunk(input: InputStream, len: Long): DataChunk {
-      val data = input.readNBytes(len.toInt())
-      val crc = input.readNBytes(4).toInt()
+      val data = input.readAtMost(len.toInt())
+      val crc = input.readAtMost(4).toInt()
       return DataChunk(len, data, crc)
    }
 
    private fun readEndChunk(input: InputStream, len: Long): EndChunk {
-      val crc = input.readNBytes(4).toUInt()
+      val crc = input.readAtMost(4).toUInt()
       return EndChunk(crc)
    }
 }
@@ -187,6 +188,21 @@ fun ByteArray.toInt(): Int {
    i = i.shl(8)
    i = i or (this[3].toInt() and 0xFF)
    return i
+}
+
+/**
+ * This is an inefficient backport of InputStream#readNBytes(int) for JDKs < 11 which we seem to support.
+ */
+private fun InputStream.readAtMost(byteCount: Int): ByteArray {
+   val buf = ByteArray(byteCount)
+   val readCount = this.read(buf)
+   return if (readCount < 0) {
+      ByteArray(0)
+   } else if (readCount < byteCount) {
+      buf.copyOf(readCount)
+   } else {
+      buf
+   }
 }
 
 sealed interface Chunk
